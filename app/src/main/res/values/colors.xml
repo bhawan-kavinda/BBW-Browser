@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bbw_bar">#FFFFFFFF</color>
+    <color name="bbw_field">#FFF1F3F4</color>
+    <color name="bbw_text">#FF202124</color>
+    <color name="bbw_hint">#FF80868B</color>
+    <color name="bbw_icon">#FF5F6368</color>
+    <color name="bbw_divider">#FFDADCE0</color>
+    <color name="bbw_accent">#FF1A73E8</color>
+</resources>
