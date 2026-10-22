@@ -25,6 +25,8 @@ import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 
 /** Callbacks from the tab WebViews to whichever Activity is currently visible. */
 interface UiListener {
@@ -49,6 +51,16 @@ object TabManager {
 
     private lateinit var app: Context
     private var nextId = 1
+
+    /**
+     * Default WebView user agent without the "; wv" and "Version/4.0" markers, so sites
+     * (Google sign-in in particular) treat it like a normal Chrome browser.
+     */
+    private val mobileUa: String by lazy {
+        WebSettings.getDefaultUserAgent(app)
+            .replace("; wv)", ")")
+            .replace(" Version/4.0", "")
+    }
 
     val tabs = mutableListOf<Tab>()
 
@@ -156,7 +168,7 @@ object TabManager {
 
     fun setDesktop(tab: Tab, enabled: Boolean) {
         tab.desktop = enabled
-        tab.webView.settings.userAgentString = if (enabled) DESKTOP_UA else null
+        tab.webView.settings.userAgentString = if (enabled) DESKTOP_UA else mobileUa
         tab.webView.reload()
     }
 
@@ -223,9 +235,15 @@ object TabManager {
             builtInZoomControls = true
             displayZoomControls = false
             if (Build.VERSION.SDK_INT >= 26) safeBrowsingEnabled = true
+            userAgentString = mobileUa
+        }
+        // Stop WebView sending the "X-Requested-With: <package name>" header that Google uses to spot embedded browsers
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) {
+            WebSettingsCompat.setRequestedWithHeaderOriginAllowList(webView.settings, emptySet())
         }
         CookieManager.getInstance().setAcceptCookie(true)
-        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false)
+        // Google sign-in needs cookies shared between its own domains
+        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
 
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(
