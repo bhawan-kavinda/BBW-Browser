@@ -38,5 +38,21 @@ object Prefs {
         get() = sp.getInt("saved_index", 0)
         set(value) = sp.edit().putInt("saved_index", value).apply()
 
+    var intercept: Boolean
+        get() = sp.getBoolean("intercept", false)
+        set(value) = sp.edit().putBoolean("intercept", value).apply()
+
+    var interceptMainOnly: Boolean
+        get() = sp.getBoolean("intercept_main_only", false)
+        set(value) = sp.edit().putBoolean("intercept_main_only", value).apply()
+
+    var zoomButtons: Boolean
+        get() = sp.getBoolean("zoom_buttons", true)
+        set(value) = sp.edit().putBoolean("zoom_buttons", value).apply()
+
+    var textZoom: Int
+        get() = sp.getInt("text_zoom", 100)
+        set(value) = sp.edit().putInt("text_zoom", value).apply()
+
     fun engine(): Engine = ENGINES[engineIndex]
 }

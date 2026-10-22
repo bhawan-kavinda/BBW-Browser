@@ -17,6 +17,7 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import kotlin.math.abs
 
 /**
  * Hosts the active tab's WebView inside a "display over other apps" window.
@@ -29,7 +30,7 @@ import android.widget.TextView
  * Everything here runs on the main thread.
  */
 object OverlayManager {
-    enum class Mode { NONE, BACKGROUND, FLOATING }
+    enum class Mode { NONE, BACKGROUND, BUBBLE, FLOATING }
 
     var mode = Mode.NONE
         private set
@@ -41,6 +42,7 @@ object OverlayManager {
     private var hosted: Tab? = null
     private var params: WindowManager.LayoutParams? = null
     private var titleView: TextView? = null
+    private var bubble: View? = null
 
     fun init(context: Context) {
         app = context.applicationContext
@@ -61,6 +63,28 @@ object OverlayManager {
     fun showBackground(): Boolean {
         if (!canDraw()) return false
         release()
+        if (!hostInvisible()) return false
+        mode = Mode.BACKGROUND
+        return true
+    }
+
+    /**
+     * The page keeps running in the invisible window while a small draggable button floats on
+     * top of other apps. Tap it to get the floating window back, long-press to open the app.
+     */
+    fun showBubble(): Boolean {
+        if (!canDraw()) return false
+        release()
+        if (!hostInvisible()) return false
+        if (!addBubble()) {
+            release()
+            return false
+        }
+        mode = Mode.BUBBLE
+        return true
+    }
+
+    private fun hostInvisible(): Boolean {
         val tab = TabManager.current()
         val webView = tab.webView
         (webView.parent as? ViewGroup)?.removeView(webView)
@@ -87,7 +111,99 @@ object OverlayManager {
             root = webView
             hosted = tab
             params = p
-            mode = Mode.BACKGROUND
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun addBubble(): Boolean {
+        val dm = app.resources.displayMetrics
+        val density = dm.density
+        val size = (52 * density).toInt()
+
+        val view = ImageView(app).apply {
+            setImageResource(R.drawable.ic_notification)
+            setColorFilter(Color.WHITE)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            val pad = size / 4
+            setPadding(pad, pad, pad, pad)
+            background = GradientDrawable().apply {
+                setShape(GradientDrawable.OVAL)
+                setColor(0xFF1A73E8.toInt())
+            }
+            elevation = 6 * density
+            contentDescription = "Open floating window"
+        }
+
+        val p = WindowManager.LayoutParams(
+            size,
+            size,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = dm.widthPixels - size - (8 * density).toInt()
+            y = (dm.heightPixels * 0.35f).toInt()
+        }
+
+        var startX = 0
+        var startY = 0
+        var touchX = 0f
+        var touchY = 0f
+        var dragged = false
+        var downAt = 0L
+        val slop = 8 * density
+
+        view.setOnTouchListener { _, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    startX = p.x
+                    startY = p.y
+                    touchX = e.rawX
+                    touchY = e.rawY
+                    dragged = false
+                    downAt = e.eventTime
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = e.rawX - touchX
+                    val dy = e.rawY - touchY
+                    if (!dragged && (abs(dx) > slop || abs(dy) > slop)) dragged = true
+                    if (dragged) {
+                        p.x = startX + dx.toInt()
+                        p.y = startY + dy.toInt()
+                        try {
+                            wm.updateViewLayout(view, p)
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (!dragged) {
+                        if (e.eventTime - downAt > 600) {
+                            openApp()
+                        } else {
+                            view.post { showFloating() }
+                        }
+                    } else {
+                        // Snap to the closest screen edge
+                        val width = app.resources.displayMetrics.widthPixels
+                        p.x = if (p.x + size / 2 < width / 2) 0 else width - size
+                        try {
+                            wm.updateViewLayout(view, p)
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+            }
+            true
+        }
+
+        return try {
+            wm.addView(view, p)
+            bubble = view
             true
         } catch (e: Exception) {
             false
@@ -138,6 +254,13 @@ object OverlayManager {
 
     /** Removes whatever overlay is showing and frees the WebView so an Activity can take it back. */
     fun release() {
+        bubble?.let {
+            try {
+                wm.removeViewImmediate(it)
+            } catch (_: Exception) {
+            }
+        }
+        bubble = null
         val r = root
         if (r == null) {
             mode = Mode.NONE
@@ -249,8 +372,8 @@ object OverlayManager {
             LinearLayout.LayoutParams(buttonSize, buttonSize)
         )
         bar.addView(
-            iconButton(R.drawable.ic_minimize, "Hide", buttonSize) {
-                container.post { showBackground() }
+            iconButton(R.drawable.ic_minimize, "Minimize to button", buttonSize) {
+                container.post { if (!showBubble()) showFloating() }
             },
             LinearLayout.LayoutParams(buttonSize, buttonSize)
         )

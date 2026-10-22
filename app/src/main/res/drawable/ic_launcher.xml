@@ -4,23 +4,34 @@
     android:height="96dp"
     android:viewportWidth="96"
     android:viewportHeight="96">
+    <!-- background -->
     <path
-        android:fillColor="#FF1A73E8"
+        android:fillColor="#FF0F1F4D"
         android:pathData="M20,0h56a20,20 0 0 1 20,20v56a20,20 0 0 1 -20,20h-56a20,20 0 0 1 -20,-20v-56a20,20 0 0 1 20,-20z" />
-    <group
-        android:scaleX="2.5"
-        android:scaleY="2.5"
-        android:translateX="18"
-        android:translateY="18">
-        <path
-            android:fillColor="#FFFFFFFF"
-            android:fillType="evenOdd"
-            android:pathData="M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2zM12,20c-4.41,0 -8,-3.59 -8,-8s3.59,-8 8,-8 8,3.59 8,8 -3.59,8 -8,8z" />
-        <path
-            android:fillColor="#FFFFFFFF"
-            android:pathData="M11,2h2v20h-2z" />
-        <path
-            android:fillColor="#FFFFFFFF"
-            android:pathData="M2,11h20v2H2z" />
-    </group>
+    <!-- globe outline -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M48,24A26,26 0 1 1 48,76A26,26 0 1 1 48,24Z"
+        android:strokeColor="#FF4FC3F7"
+        android:strokeWidth="5" />
+    <!-- meridian -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M48,24C34,36 34,64 48,76C62,64 62,36 48,24Z"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeWidth="3.5" />
+    <!-- equator and latitudes -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M22,50H74M28,37H68M28,63H68"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeWidth="3.5" />
+    <!-- "live session" dot -->
+    <path
+        android:fillColor="#FFFFB300"
+        android:pathData="M74,13A9,9 0 1 1 74,31A9,9 0 1 1 74,13Z"
+        android:strokeColor="#FF0F1F4D"
+        android:strokeWidth="3" />
 </vector>

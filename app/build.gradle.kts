@@ -15,11 +15,30 @@ android {
         versionName = "1.0.0"
     }
 
+    // Release key comes from environment variables (set by the GitHub Actions workflow).
+    // Without them the APK falls back to the debug key so it is still installable.
+    val releaseStore: String? = System.getenv("KEYSTORE_PATH")
+    val hasReleaseKey = releaseStore != null && file(releaseStore).exists()
+
+    signingConfigs {
+        if (hasReleaseKey) {
+            create("release") {
+                storeFile = file(releaseStore!!)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Signed with the debug key so the APK is directly installable
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseKey) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

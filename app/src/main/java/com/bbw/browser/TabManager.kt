@@ -9,6 +9,9 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.Message
 import android.os.Environment
 import android.text.TextUtils
 import android.view.View
@@ -20,6 +23,7 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebStorage
 import android.webkit.WebView
@@ -37,6 +41,12 @@ interface UiListener {
         callback: ValueCallback<Array<Uri>>,
         params: WebChromeClient.FileChooserParams
     ): Boolean
+
+    /** A page asked to open a new window/tab after a user tap. Must call accept/denyNewWindow. */
+    fun onNewWindowRequest(fromUrl: String, resultMsg: Message)
+
+    /** Tabs were added/removed from outside the UI (for example a page closed its own window). */
+    fun onTabsChanged()
 }
 
 /**
@@ -67,7 +77,10 @@ object TabManager {
     var currentIndex = 0
         private set
 
+    @Volatile
     var ui: UiListener? = null
+
+    private var activityCtx: Context? = null
 
     fun init(context: Context) {
         app = context.applicationContext
@@ -75,22 +88,36 @@ object TabManager {
 
     fun current(): Tab = tabs[currentIndex]
 
-    fun newTab(url: String?, select: Boolean = true, lazy: Boolean = false): Tab {
-        val ctx = MutableContextWrapper(app)
+    /**
+     * [blank] = the tab is a pop-up/new window: the opener page fills it, so nothing is loaded
+     * here and the opener tab is not paused.
+     */
+    fun newTab(
+        url: String?,
+        select: Boolean = true,
+        lazy: Boolean = false,
+        blank: Boolean = false
+    ): Tab {
+        val ctx = MutableContextWrapper(activityCtx ?: app)
         val webView = WebView(ctx)
         val tab = Tab(nextId++, webView, ctx)
         configure(tab)
 
-        val previous = if (select) tabs.getOrNull(currentIndex) else null
+        val previous = if (select && !blank) tabs.getOrNull(currentIndex) else null
         tabs.add(tab)
 
         val target = url ?: Prefs.engine().home
-        tab.url = target
-        tab.title = target
-        if (lazy) {
-            tab.pendingUrl = target
+        if (blank) {
+            tab.url = ""
+            tab.title = ""
         } else {
-            webView.loadUrl(target)
+            tab.url = target
+            tab.title = target
+            if (lazy) {
+                tab.pendingUrl = target
+            } else {
+                webView.loadUrl(target)
+            }
         }
 
         if (select) {
@@ -138,11 +165,38 @@ object TabManager {
     // ---- Activity / lifecycle helpers ----
 
     fun attachActivity(activityContext: Context) {
+        activityCtx = activityContext
         tabs.forEach { it.ctx.setBaseContext(activityContext) }
     }
 
     fun detachActivity() {
+        activityCtx = null
         tabs.forEach { it.ctx.setBaseContext(app) }
+    }
+
+    // ---- New windows (pop-ups / target=_blank) ----
+
+    /** The user agreed: open the requested window as a new tab and switch to it. */
+    fun acceptNewWindow(resultMsg: Message) {
+        val transport = resultMsg.obj as? WebView.WebViewTransport ?: return
+        val tab = newTab(null, select = true, blank = true)
+        transport.webView = tab.webView
+        resultMsg.sendToTarget()
+        saveState()
+    }
+
+    /** The user refused: hand the page a throw-away WebView and destroy it right after. */
+    fun denyNewWindow(resultMsg: Message) {
+        val transport = resultMsg.obj as? WebView.WebViewTransport ?: return
+        val sink = WebView(app)
+        transport.webView = sink
+        resultMsg.sendToTarget()
+        Handler(Looper.getMainLooper()).postDelayed({ sink.destroy() }, 1000)
+    }
+
+    fun applyTextZoom(percent: Int) {
+        Prefs.textZoom = percent
+        tabs.forEach { it.webView.settings.textZoom = percent }
     }
 
     fun resumeCurrent() {
@@ -227,7 +281,8 @@ object TabManager {
             allowFileAccess = false
             allowContentAccess = false
             javaScriptCanOpenWindowsAutomatically = false
-            setSupportMultipleWindows(false)
+            setSupportMultipleWindows(true)
+            textZoom = Prefs.textZoom
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             useWideViewPort = true
             loadWithOverviewMode = true
@@ -264,6 +319,14 @@ object TabManager {
                     }
                 }
                 return true
+            }
+
+            override fun shouldInterceptRequest(
+                view: WebView?,
+                request: WebResourceRequest?
+            ): WebResourceResponse? {
+                if (request == null) return null
+                return RequestInterceptor.intercept(tab, request)
             }
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -314,6 +377,41 @@ object TabManager {
                 if (!title.isNullOrBlank()) {
                     tab.title = title
                     dispatchUpdate(tab)
+                }
+            }
+
+            override fun onCreateWindow(
+                view: WebView?,
+                isDialog: Boolean,
+                isUserGesture: Boolean,
+                resultMsg: Message?
+            ): Boolean {
+                if (resultMsg == null) return false
+                // Windows a page opens by itself (no tap) are never allowed
+                if (!isUserGesture) return false
+                val listener = ui
+                if (listener == null) {
+                    // No browser UI to ask (floating window): open plain links in this same tab
+                    val href = view?.hitTestResult?.extra
+                    if (!href.isNullOrBlank() &&
+                        (href.startsWith("http://") || href.startsWith("https://"))
+                    ) {
+                        view?.loadUrl(href)
+                    }
+                    return false
+                }
+                listener.onNewWindowRequest(tab.url, resultMsg)
+                return true
+            }
+
+            override fun onCloseWindow(window: WebView?) {
+                // Destroying a WebView inside its own callback is unsafe, so defer it
+                Handler(Looper.getMainLooper()).post {
+                    val index = tabs.indexOfFirst { it.webView === window }
+                    if (index >= 0) {
+                        closeTab(index)
+                        ui?.onTabsChanged()
+                    }
                 }
             }
 

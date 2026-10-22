@@ -56,10 +56,48 @@
             android:visibility="gone" />
 
         <FrameLayout
-            android:id="@+id/web_container"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="1" />
+            android:layout_weight="1">
+
+            <FrameLayout
+                android:id="@+id/web_container"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <LinearLayout
+                android:id="@+id/zoom_panel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="end|bottom"
+                android:layout_marginEnd="12dp"
+                android:layout_marginBottom="16dp"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/btn_zoom_in"
+                    android:layout_width="44dp"
+                    android:layout_height="44dp"
+                    android:background="@drawable/bg_zoom"
+                    android:contentDescription="Zoom in"
+                    android:gravity="center"
+                    android:text="+"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="22sp" />
+
+                <TextView
+                    android:id="@+id/btn_zoom_out"
+                    android:layout_width="44dp"
+                    android:layout_height="44dp"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/bg_zoom"
+                    android:contentDescription="Zoom out"
+                    android:gravity="center"
+                    android:text="&#8722;"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="22sp" />
+            </LinearLayout>
+        </FrameLayout>
 
         <View
             android:layout_width="match_parent"

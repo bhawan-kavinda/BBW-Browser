@@ -7,6 +7,9 @@
         android:id="@+id/m_floating"
         android:title="Floating window" />
     <item
+        android:id="@+id/m_bubble"
+        android:title="Floating button" />
+    <item
         android:id="@+id/m_keep_alive"
         android:checkable="true"
         android:title="Keep session alive in background" />
@@ -23,4 +26,7 @@
     <item
         android:id="@+id/m_clear"
         android:title="Clear browsing data" />
+    <item
+        android:id="@+id/m_settings"
+        android:title="Settings" />
 </menu>

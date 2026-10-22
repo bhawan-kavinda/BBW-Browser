@@ -25,3 +25,11 @@ Open in Android Studio (JDK 17) and run `app`, or: `gradle wrapper --gradle-vers
 - `OverlayManager.kt`: overlay windows (background + floating)
 - `KeepAliveService.kt`: foreground service
 - `MainActivity.kt`: browser UI
+
+## Settings (menu > Settings)
+- Keep session alive, text size, search engine, zoom buttons, clear data.
+- "Intercept requests": every request the browser makes waits in a bottom sheet (URL, method, headers,
+  cookies that will be sent). Allow / Block / Allow this site / Allow all waiting.
+  Only active while the browser UI is visible; requests pass untouched while it is in the background.
+- Pages that try to open a new window after a tap ask first, then open as a separate tab.
+- Floating window > minimize = small draggable floating button (tap: window, long-press: open app).

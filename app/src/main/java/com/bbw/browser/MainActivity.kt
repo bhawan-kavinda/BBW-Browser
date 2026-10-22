@@ -7,7 +7,9 @@ import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Message
 import android.provider.Settings
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -16,6 +18,7 @@ import android.view.inputmethod.InputMethodManager
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.widget.BaseAdapter
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -44,6 +47,14 @@ class MainActivity : AppCompatActivity(), UiListener {
     private lateinit var webContainer: FrameLayout
     private lateinit var fullscreen: FrameLayout
     private lateinit var tabCount: TextView
+    private lateinit var zoomPanel: View
+
+    // Request approval sheet
+    private var interceptDialog: AlertDialog? = null
+    private var shownRequest: PendingRequest? = null
+    private lateinit var icCount: TextView
+    private lateinit var icSummary: TextView
+    private lateinit var icDetails: TextView
 
     private var customView: View? = null
     private var customCallback: WebChromeClient.CustomViewCallback? = null
@@ -74,6 +85,10 @@ class MainActivity : AppCompatActivity(), UiListener {
         webContainer = findViewById(R.id.web_container)
         fullscreen = findViewById(R.id.fullscreen)
         tabCount = findViewById(R.id.tab_count)
+        zoomPanel = findViewById(R.id.zoom_panel)
+        zoomPanel.visibility = if (Prefs.zoomButtons) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.btn_zoom_in).setOnClickListener { zoom(true) }
+        findViewById<View>(R.id.btn_zoom_out).setOnClickListener { zoom(false) }
 
         setupListeners()
         setupBackHandling()
@@ -93,6 +108,7 @@ class MainActivity : AppCompatActivity(), UiListener {
         OverlayManager.release()
         TabManager.ui = this
         TabManager.attachActivity(this)
+        RequestInterceptor.listener = { refreshInterceptSheet() }
         TabManager.resumeCurrent()
         attachCurrent()
 
@@ -106,6 +122,12 @@ class MainActivity : AppCompatActivity(), UiListener {
     override fun onStop() {
         super.onStop()
         TabManager.ui = null
+        // Nobody can answer while the UI is hidden: close the sheet and let waiting requests pass
+        RequestInterceptor.listener = null
+        interceptDialog?.dismiss()
+        interceptDialog = null
+        shownRequest = null
+        RequestInterceptor.allowAllQueued()
         if (customView != null) onHideCustomView()
         android.webkit.CookieManager.getInstance().flush()
         TabManager.saveState()
@@ -113,7 +135,8 @@ class MainActivity : AppCompatActivity(), UiListener {
 
         when {
             // The floating window already hosts the current tab
-            OverlayManager.mode == OverlayManager.Mode.FLOATING ->
+            OverlayManager.mode == OverlayManager.Mode.FLOATING ||
+                OverlayManager.mode == OverlayManager.Mode.BUBBLE ->
                 TabManager.pauseAllExceptCurrent()
             // Hand the current tab to the invisible overlay so it keeps running
             Prefs.keepAlive && OverlayManager.showBackground() ->
@@ -239,6 +262,24 @@ class MainActivity : AppCompatActivity(), UiListener {
         if (tab === TabManager.current()) render(tab)
     }
 
+    override fun onNewWindowRequest(fromUrl: String, resultMsg: Message) {
+        val host = Uri.parse(fromUrl).host ?: fromUrl
+        AlertDialog.Builder(this)
+            .setTitle("Open in a new tab?")
+            .setMessage("$host wants to open a new tab.")
+            .setCancelable(false)
+            .setPositiveButton("Open") { _, _ ->
+                TabManager.acceptNewWindow(resultMsg)
+                attachCurrent()
+            }
+            .setNegativeButton("Don't allow") { _, _ -> TabManager.denyNewWindow(resultMsg) }
+            .show()
+    }
+
+    override fun onTabsChanged() {
+        attachCurrent()
+    }
+
     override fun onShowCustomView(view: View, callback: WebChromeClient.CustomViewCallback) {
         if (customView != null) {
             callback.onCustomViewHidden()
@@ -356,7 +397,9 @@ class MainActivity : AppCompatActivity(), UiListener {
                 TabManager.newTab(null)
                 attachCurrent()
             }
-            R.id.m_floating -> startFloating()
+            R.id.m_floating -> startOverlay(bubble = false)
+            R.id.m_bubble -> startOverlay(bubble = true)
+            R.id.m_settings -> showSettings()
             R.id.m_keep_alive -> toggleKeepAlive()
             R.id.m_desktop -> TabManager.setDesktop(tab, !tab.desktop)
             R.id.m_share -> shareUrl(tab.url)
@@ -365,19 +408,160 @@ class MainActivity : AppCompatActivity(), UiListener {
         }
     }
 
-    private fun startFloating() {
+    private fun startOverlay(bubble: Boolean) {
         if (!OverlayManager.canDraw()) {
             requestOverlayPermission()
             return
         }
         KeepAliveService.start(this)
         webContainer.removeAllViews()
-        if (OverlayManager.showFloating()) {
+        val shown = if (bubble) OverlayManager.showBubble() else OverlayManager.showFloating()
+        if (shown) {
             moveTaskToBack(true)
         } else {
             attachCurrent()
             toast("Could not open the floating window")
         }
+    }
+
+    // ------------------------------------------------------------------ zoom
+
+    private fun zoom(zoomIn: Boolean) {
+        val webView = TabManager.current().webView
+        val changed = if (zoomIn) webView.zoomIn() else webView.zoomOut()
+        if (!changed) {
+            // Page forbids pinch zoom (or is at its limit): scale the text instead
+            val settings = webView.settings
+            settings.textZoom = (settings.textZoom + if (zoomIn) 10 else -10).coerceIn(50, 300)
+        }
+    }
+
+    // ------------------------------------------------------------------ settings
+
+    private fun showSettings() {
+        val v = layoutInflater.inflate(R.layout.dialog_settings, null)
+        val keep = v.findViewById<CheckBox>(R.id.s_keep_alive)
+        val intercept = v.findViewById<CheckBox>(R.id.s_intercept)
+        val mainOnly = v.findViewById<CheckBox>(R.id.s_intercept_main)
+        val zoomButtons = v.findViewById<CheckBox>(R.id.s_zoom_buttons)
+        val textSize = v.findViewById<TextView>(R.id.s_text_size)
+        val engine = v.findViewById<TextView>(R.id.s_engine)
+        val clear = v.findViewById<TextView>(R.id.s_clear)
+
+        keep.isChecked = Prefs.keepAlive && OverlayManager.canDraw()
+        intercept.isChecked = Prefs.intercept
+        mainOnly.isChecked = Prefs.interceptMainOnly
+        mainOnly.isEnabled = Prefs.intercept
+        zoomButtons.isChecked = Prefs.zoomButtons
+        textSize.text = "Text size: ${Prefs.textZoom}%"
+        engine.text = "Search engine: ${Prefs.engine().name}"
+
+        keep.setOnClickListener {
+            if (keep.isChecked) {
+                if (!OverlayManager.canDraw()) {
+                    keep.isChecked = false
+                    requestOverlayPermission()
+                } else {
+                    Prefs.keepAlive = true
+                    KeepAliveService.start(this)
+                    askNotificationPermission()
+                }
+            } else {
+                Prefs.keepAlive = false
+                KeepAliveService.stop(this)
+            }
+        }
+        intercept.setOnClickListener {
+            Prefs.intercept = intercept.isChecked
+            mainOnly.isEnabled = intercept.isChecked
+            if (intercept.isChecked) {
+                toast("Requests now wait for your approval")
+            } else {
+                RequestInterceptor.reset()
+            }
+        }
+        mainOnly.setOnClickListener { Prefs.interceptMainOnly = mainOnly.isChecked }
+        zoomButtons.setOnClickListener {
+            Prefs.zoomButtons = zoomButtons.isChecked
+            zoomPanel.visibility = if (zoomButtons.isChecked) View.VISIBLE else View.GONE
+        }
+        textSize.setOnClickListener {
+            chooseTextSize { textSize.text = "Text size: ${Prefs.textZoom}%" }
+        }
+        engine.setOnClickListener {
+            chooseEngine { engine.text = "Search engine: ${Prefs.engine().name}" }
+        }
+        clear.setOnClickListener { confirmClear() }
+
+        AlertDialog.Builder(this)
+            .setTitle("Settings")
+            .setView(v)
+            .setPositiveButton("Done", null)
+            .show()
+    }
+
+    private fun chooseTextSize(onDone: () -> Unit) {
+        val values = intArrayOf(75, 100, 125, 150, 200)
+        val labels = values.map { "$it%" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Text size")
+            .setSingleChoiceItems(labels, values.indexOf(Prefs.textZoom).coerceAtLeast(1)) { dialog, which ->
+                TabManager.applyTextZoom(values[which])
+                dialog.dismiss()
+                onDone()
+            }
+            .show()
+    }
+
+    // ------------------------------------------------------------------ request approval sheet
+
+    private fun refreshInterceptSheet() {
+        val first = RequestInterceptor.queue.firstOrNull()
+        if (first == null) {
+            interceptDialog?.dismiss()
+            interceptDialog = null
+            shownRequest = null
+            return
+        }
+        if (interceptDialog == null) buildInterceptSheet()
+        shownRequest = first
+        icCount.text = "${RequestInterceptor.queue.size} waiting"
+        icSummary.text = "${first.method}  ${first.url}"
+        icDetails.text = first.describe()
+    }
+
+    private fun buildInterceptSheet() {
+        val view = layoutInflater.inflate(R.layout.dialog_intercept, null)
+        icCount = view.findViewById(R.id.ic_count)
+        icSummary = view.findViewById(R.id.ic_summary)
+        icDetails = view.findViewById(R.id.ic_details)
+        view.findViewById<View>(R.id.ic_allow).setOnClickListener {
+            shownRequest?.let { RequestInterceptor.allow(it) }
+        }
+        view.findViewById<View>(R.id.ic_block).setOnClickListener {
+            shownRequest?.let { RequestInterceptor.block(it) }
+        }
+        view.findViewById<View>(R.id.ic_allow_site).setOnClickListener {
+            shownRequest?.let { RequestInterceptor.allowHost(it) }
+        }
+        view.findViewById<View>(R.id.ic_allow_all).setOnClickListener {
+            RequestInterceptor.allowAllQueued()
+        }
+        view.findViewById<View>(R.id.ic_stop).setOnClickListener {
+            Prefs.intercept = false
+            RequestInterceptor.reset()
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setView(view)
+            .setCancelable(false)
+            .create()
+        dialog.window?.setGravity(Gravity.BOTTOM)
+        dialog.show()
+        dialog.window?.setLayout(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        interceptDialog = dialog
     }
 
     private fun toggleKeepAlive() {
@@ -405,13 +589,14 @@ class MainActivity : AppCompatActivity(), UiListener {
         startActivity(Intent.createChooser(send, null))
     }
 
-    private fun chooseEngine() {
+    private fun chooseEngine(onDone: () -> Unit = {}) {
         val names = Prefs.ENGINES.map { it.name }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle("Search engine")
             .setSingleChoiceItems(names, Prefs.engineIndex) { dialog, which ->
                 Prefs.engineIndex = which
                 dialog.dismiss()
+                onDone()
             }
             .show()
     }
