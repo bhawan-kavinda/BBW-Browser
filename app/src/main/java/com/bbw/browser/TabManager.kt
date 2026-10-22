@@ -29,6 +29,7 @@ import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
+import androidx.webkit.UserAgentMetadata
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
 
@@ -55,21 +56,57 @@ interface UiListener {
  * overlay window without being recreated. That is what keeps the session alive.
  */
 object TabManager {
-    private const val DESKTOP_UA =
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) " +
-            "Chrome/124.0.0.0 Safari/537.36"
-
     private lateinit var app: Context
     private var nextId = 1
 
-    /**
-     * Default WebView user agent without the "; wv" and "Version/4.0" markers, so sites
-     * (Google sign-in in particular) treat it like a normal Chrome browser.
-     */
+    // ---- Browser identity: look like a regular Chrome (user agent + client hints) ----
+
+    /** Chrome version of the installed WebView, e.g. "124.0.6367.82". */
+    private val chromeFull: String by lazy {
+        Regex("Chrome/([\\d.]+)").find(WebSettings.getDefaultUserAgent(app))
+            ?.groupValues?.get(1) ?: "124.0.0.0"
+    }
+    private val chromeMajor: String get() = chromeFull.substringBefore('.')
+
+    /** Same shape as Chrome's reduced user agent: no "; wv", no "Version/4.0", no device model. */
     private val mobileUa: String by lazy {
-        WebSettings.getDefaultUserAgent(app)
-            .replace("; wv)", ")")
-            .replace(" Version/4.0", "")
+        "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) " +
+            "Chrome/$chromeMajor.0.0.0 Mobile Safari/537.36"
+    }
+
+    private val desktopUa: String by lazy {
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+            "Chrome/$chromeMajor.0.0.0 Safari/537.36"
+    }
+
+    /** Client hints (Sec-CH-UA) must agree with the user agent, otherwise they say "Android WebView". */
+    private fun chromeMetadata(desktop: Boolean): UserAgentMetadata {
+        fun brand(name: String, major: String, full: String) =
+            UserAgentMetadata.BrandVersion.Builder()
+                .setBrand(name)
+                .setMajorVersion(major)
+                .setFullVersion(full)
+                .build()
+        return UserAgentMetadata.Builder()
+            .setBrandVersionList(
+                listOf(
+                    brand("Not_A Brand", "8", "8.0.0.0"),
+                    brand("Chromium", chromeMajor, chromeFull),
+                    brand("Google Chrome", chromeMajor, chromeFull)
+                )
+            )
+            .setFullVersion(chromeFull)
+            .setPlatform(if (desktop) "Linux" else "Android")
+            .setMobile(!desktop)
+            .build()
+    }
+
+    private fun applyIdentity(webView: WebView, desktop: Boolean) {
+        val settings = webView.settings
+        settings.userAgentString = if (desktop) desktopUa else mobileUa
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.USER_AGENT_METADATA)) {
+            WebSettingsCompat.setUserAgentMetadata(settings, chromeMetadata(desktop))
+        }
     }
 
     val tabs = mutableListOf<Tab>()
@@ -222,7 +259,7 @@ object TabManager {
 
     fun setDesktop(tab: Tab, enabled: Boolean) {
         tab.desktop = enabled
-        tab.webView.settings.userAgentString = if (enabled) DESKTOP_UA else mobileUa
+        applyIdentity(tab.webView, enabled)
         tab.webView.reload()
     }
 
@@ -290,8 +327,8 @@ object TabManager {
             builtInZoomControls = true
             displayZoomControls = false
             if (Build.VERSION.SDK_INT >= 26) safeBrowsingEnabled = true
-            userAgentString = mobileUa
         }
+        applyIdentity(webView, false)
         // Stop WebView sending the "X-Requested-With: <package name>" header that Google uses to spot embedded browsers
         if (WebViewFeature.isFeatureSupported(WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) {
             WebSettingsCompat.setRequestedWithHeaderOriginAllowList(webView.settings, emptySet())
